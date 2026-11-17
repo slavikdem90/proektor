@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Проекция: Шарики</title>
+<style>
+  :root { --bg:#05060a; --fg:#e8ecf4; --mut:#8a93a6; --acc:#ffcc33; --panel:rgba(16,19,28,.92); }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:15px/1.4 -apple-system,system-ui,sans-serif; overflow:hidden; }
+  canvas#game { position:fixed; inset:0; width:100vw; height:100vh; display:block; }
+  .screen { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; }
+  .card { background:var(--panel); border:1px solid #2a3142; border-radius:14px; padding:24px 28px; max-width:520px; }
+  .card h1 { margin:0 0 12px; font-size:22px; }
+  .card p, .card li { color:var(--mut); margin:6px 0; }
+  .card kbd { background:#222838; border-radius:4px; padding:1px 6px; color:var(--fg); font:13px ui-monospace,monospace; }
+  select, button { font:inherit; border-radius:8px; border:1px solid #39415a; background:#1a1f2d; color:var(--fg); padding:8px 12px; }
+  button.main { background:var(--acc); color:#111; border:0; font-weight:600; cursor:pointer; }
+  .row { display:flex; gap:8px; margin:14px 0 6px; flex-wrap:wrap; }
+  #calib { background:#000; display:none; }
+  #calib .mk { position:absolute; width:56px; height:56px; margin:-28px 0 0 -28px; border-radius:50%; background:#fff; }
+  #calib .mk::before, #calib .mk::after { content:""; position:absolute; background:#000; left:50%; top:50%; }
+  #calib .mk::before { width:2px; height:40px; margin:-20px 0 0 -1px; }
+  #calib .mk::after { width:40px; height:2px; margin:-1px 0 0 -20px; }
+  #calib .mk.next { animation:pulse .7s infinite alternate; }
+  #calib .mk.done { background:#3c3; }
+  @keyframes pulse { to { transform:scale(1.25); } }
+  #calibBox { position:relative; cursor:crosshair; outline:2px solid #444; }
+  #calibBox video { width:100%; height:100%; display:block; }
+  #calibBox .pt { position:absolute; width:12px; height:12px; margin:-6px 0 0 -6px; border-radius:50%; background:#3c3; border:2px solid #000; pointer-events:none; }
+  #calibHint { position:absolute; left:0; right:0; bottom:9%; text-align:center; color:#aaa; font-size:16px; }
+  #hud { position:fixed; top:14px; left:20px; font-weight:700; font-size:34px; color:#fff; text-shadow:0 2px 8px #000; pointer-events:none; }
+  #status { position:fixed; bottom:10px; left:14px; color:var(--mut); font:12px ui-monospace,monospace; pointer-events:none; white-space:pre; }
+  #preview { position:fixed; right:12px; bottom:12px; width:320px; border:1px solid #444; display:none; }
+  #settings { position:fixed; top:12px; right:12px; width:290px; display:none; }
+  #settings label { display:block; margin:10px 0 2px; color:var(--mut); font-size:13px; }
+  #settings input[type=range] { width:100%; }
+  #settings .v { float:right; color:var(--fg); }
+  #toast { position:fixed; top:40%; left:0; right:0; text-align:center; font-size:28px; font-weight:700; pointer-events:none; opacity:0; transition:opacity .4s; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hud"></div>
+<div id="status"></div>
+<canvas id="preview"></canvas>
+<div id="toast"></div>
+
+<div id="start" class="screen">
+  <div class="card">
+    <h1>Шарики на проекции</h1>
+    <ol>
+      <li>Перетащи это окно на проектор и нажми <kbd>F</kbd> (весь экран).</li>
+      <li>Выбери камеру и нажми «Старт».</li>
+      <li>Нажми <kbd>C</kbd>: калибровка, 4 клика по меткам на картинке с камеры.</li>
+      <li>Бросай мяч в шарики.</li>
+    </ol>
+    <div class="row">
+      <select id="camSel"><option value="">— камера —</option></select>
+      <button class="main" id="startBtn">Старт</button>
+      <button id="noCamBtn">Без камеры (мышью)</button>
+    </div>
+    <p><kbd>C</kbd> калибровка · <kbd>D</kbd> отладка · <kbd>S</kbd> настройки · <kbd>R</kbd> сброс счёта · <kbd>F</kbd> весь экран · клик мышью = попадание</p>
+  </div>
+</div>
+
+<div id="calib" class="screen">
+  <div class="mk" data-i="0"></div><div class="mk" data-i="1"></div>
+  <div class="mk" data-i="2"></div><div class="mk" data-i="3"></div>
+  <div id="calibBox"><video id="calibVideo" muted playsinline></video></div>
+  <div id="calibHint"></div>
+</div>
+
+<div id="settings" class="card">
+  <b>Настройки</b> <span style="color:var(--mut)">(S — закрыть)</span>
+  <label>Порог яркости <span class="v" id="v_thr"></span></label>
+  <input type="range" id="s_thr" min="8" max="90" step="1">
+  <label>Мин. размер пятна, клеток <span class="v" id="v_minBlob"></span></label>
+  <input type="range" id="s_minBlob" min="2" max="80" step="1">
+  <label>Макс. размер пятна, клеток <span class="v" id="v_maxBlob"></span></label>
+  <input type="range" id="s_maxBlob" min="40" max="1500" step="10">
+  <label>Пауза после попадания, мс <span class="v" id="v_cooldown"></span></label>
+  <input type="range" id="s_cooldown" min="100" max="1500" step="50">
+  <label>Размер шарика, % высоты <span class="v" id="v_size"></span></label>
+  <input type="range" id="s_size" min="4" max="20" step="1">
+  <label>Шариков на экране <span class="v" id="v_count"></span></label>
+  <input type="range" id="s_count" min="1" max="12" step="1">
+  <label>Запас попадания вокруг шарика, % <span class="v" id="v_slack"></span></label>
+  <input type="range" id="s_slack" min="0" max="100" step="5">
+</div>
+
+<script>
+'use strict';
+// ---------- storage ----------
+const LS = {
+  get(k, d) { try { const v = localStorage.getItem('proektor.' + k); return v ? JSON.parse(v) : d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('proektor.' + k, JSON.stringify(v)); } catch {} }
+};
+const cfg = Object.assign({ thr: 30, minBlob: 6, maxBlob: 600, cooldown: 400, size: 9, count: 5, slack: 30 }, LS.get('cfg', {}));
+
+// ---------- dom ----------
+const $ = id => document.getElementById(id);
+const game = $('game'), g = game.getContext('2d');
+const video = document.createElement('video'); video.muted = true; video.playsInline = true;
+const proc = document.createElement('canvas'); const pctx = proc.getContext('2d', { willReadFrequently: true });
+const preview = $('preview'), pv = preview.getContext('2d');
+let W = 0, H = 0, DPR = 1;
+function resize() {
+  DPR = window.devicePixelRatio || 1; W = innerWidth; H = innerHeight;
+  game.width = W * DPR; game.height = H * DPR; g.setTransform(DPR, 0, 0, DPR, 0, 0);
+  layoutBalloons();
+}
+addEventListener('resize', resize);
+
+// ---------- homography ----------
+// H maps screen-normalized (x,y) -> camera-normalized (u,v)
+function solveHomography(src, dst) {
+  const A = [], b = [];
+  for (let i = 0; i < 4; i++) {
+    const [x, y] = src[i], [u, v] = dst[i];
+    A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u);
+    A.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v);
+  }
+  const n = 8;
+  for (let c = 0; c < n; c++) {
+    let p = c; for (let r = c + 1; r < n; r++) if (Math.abs(A[r][c]) > Math.abs(A[p][c])) p = r;
+    [A[c], A[p]] = [A[p], A[c]]; [b[c], b[p]] = [b[p], b[c]];
+    if (Math.abs(A[c][c]) < 1e-12) return null;
+    for (let r = 0; r < n; r++) if (r !== c) {
+      const f = A[r][c] / A[c][c];
+      for (let k = c; k < n; k++) A[r][k] -= f * A[c][k];
+      b[r] -= f * b[c];
+    }
+  }
+  const h = b.map((v, i) => v / A[i][i]); h.push(1); return h;
+}
+function applyH(h, x, y) {
+  const w = h[6] * x + h[7] * y + h[8];
+  return [(h[0] * x + h[1] * y + h[2]) / w, (h[3] * x + h[4] * y + h[5]) / w];
+}
+
+// ---------- camera ----------
+let stream = null, camOn = false;
+async function listCams() {
+  const sel = $('camSel');
+  try {
+    const tmp = await navigator.mediaDevices.getUserMedia({ video: true });
+    tmp.getTracks().forEach(t => t.stop());
+  } catch (e) { toast('Нет доступа к камере: ' + e.name); }
+  const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+  sel.innerHTML = devs.map((d, i) => `<option value="${d.deviceId}">${d.label || 'Камера ' + (i + 1)}</option>`).join('');
+  const saved = LS.get('cam', ''); if (devs.some(d => d.deviceId === saved)) sel.value = saved;
+}
+async function startCam(id) {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: { deviceId: id ? { exact: id } : undefined, width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60 } }
+  });
+  video.srcObject = stream; $('calibVideo').srcObject = stream;
+  await video.play();
+  const PW = 480; proc.width = PW; proc.height = Math.round(PW * video.videoHeight / video.videoWidth);
+  preview.width = proc.width; preview.height = proc.height;
+  camOn = true; buildLUT(); scheduleFrame();
+  const s = stream.getVideoTracks()[0].getSettings();
+  camInfo = `${s.width}×${s.height} @ ${s.frameRate ? Math.round(s.frameRate) : '?'} к/с`;
+}
+let camInfo = '';
+
+// ---------- calibration ----------
+const M = 0.06;
+const markers = [[M, M], [1 - M, M], [1 - M, 1 - M], [M, 1 - M]];
+let calib = LS.get('calib', null); // camera-normalized points
+let Hm = calib ? solveHomography(markers, calib) : null;
+let calibPts = [], calibrating = false;
+
+function openCalib() {
+  if (!camOn) { toast('Сначала включи камеру'); return; }
+  calibrating = true; calibPts = [];
+  const el = $('calib'); el.style.display = 'flex';
+  el.querySelectorAll('.mk').forEach((m, i) => { m.style.left = markers[i][0] * 100 + 'vw'; m.style.top = markers[i][1] * 100 + 'vh'; });
+  const ar = video.videoWidth / video.videoHeight;
+  const bw = Math.min(innerWidth * 0.62, innerHeight * 0.62 * ar);
+  const box = $('calibBox'); box.style.width = bw + 'px'; box.style.height = bw / ar + 'px';
+  box.querySelectorAll('.pt').forEach(p => p.remove());
+  $('calibVideo').play();
+  updateCalibUI();
+}
+function updateCalibUI() {
+  const names = ['левую верхнюю', 'правую верхнюю', 'правую нижнюю', 'левую нижнюю'];
+  document.querySelectorAll('#calib .mk').forEach((m, i) => {
+    m.classList.toggle('done', i < calibPts.length); m.classList.toggle('next', i === calibPts.length);
+  });
+  $('calibHint').textContent = calibPts.length < 4
+    ? `На картинке с камеры кликни ${names[calibPts.length]} метку (мигает). Esc — отмена, Backspace — шаг назад.`
+    : '';
+}
+$('calibBox').addEventListener('click', e => {
+  if (!calibrating) return;
+  const r = e.currentTarget.getBoundingClientRect();
+  const u = (e.clientX - r.left) / r.width, v = (e.clientY - r.top) / r.height;
+  calibPts.push([u, v]);
+  const p = document.createElement('div'); p.className = 'pt'; p.style.left = u * 100 + '%'; p.style.top = v * 100 + '%';
+  e.currentTarget.appendChild(p);
+  if (calibPts.length === 4) {
+    const h = solveHomography(markers, calibPts);
+    if (!h) { toast('Точки легли криво, повтори'); openCalib(); return; }
+    calib = calibPts; Hm = h; LS.set('calib', calib); buildLUT();
+    closeCalib(); toast('Калибровка сохранена');
+  } else updateCalibUI();
+});
+function closeCalib() { calibrating = false; $('calib').style.display = 'none'; warm = 0; }
+
+// ---------- detection on a grid in screen space ----------
+const GW = 128, GH = 72, N = GW * GH;
+let lut = null;                        // pixel offset in proc image per grid cell, -1 if outside
+const prev = new Float32Array(N), cur = new Float32Array(N);
+const mask = new Uint8Array(N), ignoreUntil = new Float64Array(N), seen = new Uint8Array(N);
+let warm = 0, lastHit = 0, procFps = 0, fpsCount = 0, fpsT = performance.now(), motionCells = 0;
+
+function buildLUT() {
+  if (!Hm || !proc.width) { lut = null; return; }
+  lut = new Int32Array(N);
+  for (let gy = 0; gy < GH; gy++) for (let gx = 0; gx < GW; gx++) {
+    const [u, v] = applyH(Hm, (gx + 0.5) / GW, (gy + 0.5) / GH);
+    const px = Math.round(u * proc.width), py = Math.round(v * proc.height);
+    lut[gy * GW + gx] = (px < 0 || py < 0 || px >= proc.width - 1 || py >= proc.height - 1) ? -1 : (py * proc.width + px) * 4;
+  }
+  warm = 0;
+}
+function scheduleFrame() {
+  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(onFrame);
+  else requestAnimationFrame(onFrame);
+}
+function onFrame() {
+  if (!camOn) return;
+  pctx.drawImage(video, 0, 0, proc.width, proc.height);
+  fpsCount++; const t = performance.now();
+  if (t - fpsT > 1000) { procFps = fpsCount * 1000 / (t - fpsT); fpsCount = 0; fpsT = t; }
+  if (lut && !calibrating) detect(t);
+  if (debug) drawPreview();
+  scheduleFrame();
+}
+function detect(now) {
+  const d = pctx.getImageData(0, 0, proc.width, proc.height).data, w4 = proc.width * 4;
+  for (let i = 0; i < N; i++) {
+    const o = lut[i]; if (o < 0) { cur[i] = 0; continue; }
+    // average of 2x2 to reduce noise
+    cur[i] = (d[o] + 2 * d[o + 1] + d[o + 2] + d[o + 4] + 2 * d[o + 5] + d[o + 6] + d[o + w4] + 2 * d[o + w4 + 1] + d[o + w4 + 2]) / 12;
+  }
+  if (warm < 8) { prev.set(cur); warm++; return; }
+  let cnt = 0, valid = 0;
+  for (let i = 0; i < N; i++) {
+    if (lut[i] < 0) { mask[i] = 0; continue; }
+    valid++;
+    const m = Math.abs(cur[i] - prev[i]) > cfg.thr && ignoreUntil[i] < now ? 1 : 0;
+    mask[i] = m; cnt += m;
+  }
+  prev.set(cur); motionCells = cnt;
+  if (cnt > valid * 0.25) return;      // whole-frame change: exposure, lights
+  if (now - lastHit < cfg.cooldown || cnt < cfg.minBlob) return;
+  // largest 8-connected blob
+  seen.fill(0); let best = null; const stack = [];
+  for (let i = 0; i < N; i++) {
+    if (!mask[i] || seen[i]) continue;
+    let n = 0, sx = 0, sy = 0; stack.push(i); seen[i] = 1;
+    while (stack.length) {
+      const j = stack.pop(), x = j % GW, y = (j / GW) | 0; n++; sx += x; sy += y;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= GW || ny >= GH) continue;
+        const k = ny * GW + nx; if (mask[k] && !seen[k]) { seen[k] = 1; stack.push(k); }
+      }
+    }
+    if (!best || n > best.n) best = { n, x: sx / n, y: sy / n };
+  }
+  if (best && best.n >= cfg.minBlob && best.n <= cfg.maxBlob) {
+    lastHit = now;
+    hit(((best.x + 0.5) / GW) * W, ((best.y + 0.5) / GH) * H, 'cam');
+  }
+}
+function ignoreRect(x, y, r, ms) {      // screen px rect around changing graphics
+  const until = performance.now() + ms;
+  const x0 = Math.max(0, Math.floor((x - r) / W * GW)), x1 = Math.min(GW - 1, Math.ceil((x + r) / W * GW));
+  const y0 = Math.max(0, Math.floor((y - r) / H * GH)), y1 = Math.min(GH - 1, Math.ceil((y + r) / H * GH));
+  for (let gy = y0; gy <= y1; gy++) for (let gx = x0; gx <= x1; gx++) {
+    const k = gy * GW + gx; if (ignoreUntil[k] < until) ignoreUntil[k] = until;
+  }
+}
+function drawPreview() {
+  pv.drawImage(proc, 0, 0);
+  if (calib) {
+    pv.strokeStyle = '#3c3'; pv.lineWidth = 2; pv.beginPath();
+    calib.forEach(([u, v], i) => i ? pv.lineTo(u * proc.width, v * proc.height) : pv.moveTo(u * proc.width, v * proc.height));
+    pv.closePath(); pv.stroke();
+  }
+}
+
+// ---------- game ----------
+let balloons = [], particles = [], marks = [], score = 0, debug = false;
+const COLORS = ['#ff4d6d', '#ffcc33', '#4dd2ff', '#7cff6b', '#c77dff', '#ff8c42'];
+function radius() { return H * cfg.size / 100; }
+function spawnBalloon(delay = 0) {
+  const r = radius();
+  for (let tries = 0; tries < 60; tries++) {
+    const x = r * 1.2 + Math.random() * (W - r * 2.4), y = r * 1.6 + Math.random() * (H - r * 3);
+    if (balloons.every(b => Math.hypot(b.x - x, b.y - y) > b.r + r + 20)) {
+      const b = { x, y, r, c: COLORS[(Math.random() * COLORS.length) | 0], born: performance.now() + delay, ph: Math.random() * 6 };
+      balloons.push(b); ignoreRect(x, y + r * 0.4, r * 1.6, delay + 1100); return;
+    }
+  }
+}
+function layoutBalloons() { balloons = []; for (let i = 0; i < cfg.count; i++) spawnBalloon(i * 150); }
+function hit(x, y, src) {
+  marks.push({ x, y, t: performance.now(), src });
+  let target = null, bestD = Infinity;
+  for (const b of balloons) {
+    if (performance.now() < b.born) continue;
+    const d = Math.hypot(b.x - x, b.y - y);
+    if (d < b.r * (1 + cfg.slack / 100) && d < bestD) { bestD = d; target = b; }
+  }
+  if (!target) return;
+  balloons.splice(balloons.indexOf(target), 1);
+  score++; popSound();
+  for (let i = 0; i < 26; i++) {
+    const a = Math.random() * Math.PI * 2, s = 2 + Math.random() * 7;
+    particles.push({ x: target.x, y: target.y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, c: target.c, life: 1 });
+  }
+  ignoreRect(target.x, target.y, target.r * 2.6, 900);
+  setTimeout(() => spawnBalloon(0), 700);
+}
+function drawBalloon(b, now) {
+  const k = Math.min(1, Math.max(0, (now - b.born) / 600));
+  if (k <= 0) return;
+  const r = b.r * (0.4 + 0.6 * k);
+  g.globalAlpha = k;
+  g.strokeStyle = '#ddd'; g.lineWidth = 2; g.beginPath(); g.moveTo(b.x, b.y + r); g.lineTo(b.x, b.y + r * 2); g.stroke();
+  const grd = g.createRadialGradient(b.x - r * .35, b.y - r * .4, r * .1, b.x, b.y, r * 1.1);
+  grd.addColorStop(0, '#fff'); grd.addColorStop(0.25, b.c); grd.addColorStop(1, shade(b.c));
+  g.fillStyle = grd; g.beginPath(); g.ellipse(b.x, b.y, r * 0.86, r, 0, 0, Math.PI * 2); g.fill();
+  g.globalAlpha = 1;
+}
+function shade(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgb(${(n >> 16) * .45 | 0},${(n >> 8 & 255) * .45 | 0},${(n & 255) * .45 | 0})`;
+}
+function render() {
+  const now = performance.now();
+  g.fillStyle = '#05060a'; g.fillRect(0, 0, W, H);
+  for (const b of balloons) drawBalloon(b, now);
+  for (const p of particles) {
+    p.x += p.vx; p.y += p.vy; p.vy += 0.25; p.life -= 0.025;
+    g.globalAlpha = Math.max(0, p.life); g.fillStyle = p.c; g.fillRect(p.x - 4, p.y - 4, 8, 8);
+  }
+  g.globalAlpha = 1; particles = particles.filter(p => p.life > 0);
+  if (debug) {
+    if (lut) {
+      const cw = W / GW, ch = H / GH;
+      g.fillStyle = 'rgba(255,40,40,.55)';
+      for (let i = 0; i < N; i++) if (mask[i]) g.fillRect((i % GW) * cw, ((i / GW) | 0) * ch, cw, ch);
+      g.fillStyle = 'rgba(80,120,255,.12)';
+      for (let i = 0; i < N; i++) if (ignoreUntil[i] > now) g.fillRect((i % GW) * cw, ((i / GW) | 0) * ch, cw, ch);
+    }
+    marks = marks.filter(m => now - m.t < 1500);
+    for (const m of marks) {
+      g.strokeStyle = m.src === 'cam' ? '#0f0' : '#0af'; g.lineWidth = 3; g.globalAlpha = 1 - (now - m.t) / 1500;
+      g.beginPath(); g.arc(m.x, m.y, 18, 0, Math.PI * 2); g.moveTo(m.x - 26, m.y); g.lineTo(m.x + 26, m.y); g.moveTo(m.x, m.y - 26); g.lineTo(m.x, m.y + 26); g.stroke();
+    }
+    g.globalAlpha = 1;
+    $('status').textContent = `камера: ${camOn ? camInfo : 'выкл'} · обработка ${procFps.toFixed(0)} к/с · калибровка: ${Hm ? 'есть' : 'нет'} · движение: ${motionCells} клеток`;
+  }
+  $('hud').textContent = score;
+  requestAnimationFrame(render);
+}
+
+// ---------- sound ----------
+let ac = null;
+function popSound() {
+  try {
+    ac = ac || new AudioContext();
+    const len = ac.sampleRate * 0.12, buf = ac.createBuffer(1, len, ac.sampleRate), ch = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) ch[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3);
+    const src = ac.createBufferSource(), f = ac.createBiquadFilter(), gn = ac.createGain();
+    f.type = 'bandpass'; f.frequency.value = 900 + Math.random() * 600; gn.gain.value = 0.9;
+    src.buffer = buf; src.connect(f).connect(gn).connect(ac.destination); src.start();
+  } catch {}
+}
+
+// ---------- ui ----------
+let toastT = 0;
+function toast(s) { const t = $('toast'); t.textContent = s; t.style.opacity = 1; clearTimeout(toastT); toastT = setTimeout(() => t.style.opacity = 0, 1800); }
+function setDebug(on) { debug = on; preview.style.display = on && camOn ? 'block' : 'none'; $('status').style.display = on ? 'block' : 'none'; }
+function bindSettings() {
+  for (const k of Object.keys(cfg)) {
+    const el = $('s_' + k); if (!el) continue;
+    el.value = cfg[k]; $('v_' + k).textContent = cfg[k];
+    el.addEventListener('input', () => {
+      cfg[k] = +el.value; $('v_' + k).textContent = cfg[k]; LS.set('cfg', cfg);
+      if (k === 'size' || k === 'count') layoutBalloons();
+    });
+  }
+}
+$('startBtn').onclick = async () => {
+  const id = $('camSel').value; LS.set('cam', id);
+  try { await startCam(id); } catch (e) { toast('Камера не запустилась: ' + e.name); return; }
+  $('start').style.display = 'none';
+  if (!Hm) openCalib(); else toast('Калибровка загружена. C — перекалибровать');
+};
+$('noCamBtn').onclick = () => { $('start').style.display = 'none'; toast('Режим мыши: кликай по шарикам'); };
+game.addEventListener('click', e => hit(e.clientX, e.clientY, 'mouse'));
+addEventListener('keydown', e => {
+  if (calibrating) {
+    if (e.key === 'Escape') closeCalib();
+    if (e.key === 'Backspace' && calibPts.length) { calibPts.pop(); $('calibBox').querySelector('.pt:last-of-type')?.remove(); updateCalibUI(); }
+    return;
+  }
+  const k = e.code;
+  if (k === 'KeyF') { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); }
+  else if (k === 'KeyC') openCalib();
+  else if (k === 'KeyD') setDebug(!debug);
+  else if (k === 'KeyS') { const s = $('settings'); s.style.display = s.style.display === 'block' ? 'none' : 'block'; }
+  else if (k === 'KeyR') { score = 0; layoutBalloons(); }
+  else if (k === 'Escape') $('start').style.display = 'flex';
+});
+
+resize(); bindSettings(); setDebug(false); render();
+if (navigator.mediaDevices?.getUserMedia) listCams(); else toast('Браузер не даёт доступ к камере');
+</script>
+</body>
+</html>
