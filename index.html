@@ -29,6 +29,7 @@
   #calibBox video { width:100%; height:100%; display:block; }
   #calibBox .pt { position:absolute; width:12px; height:12px; margin:-6px 0 0 -6px; border-radius:50%; background:#3c3; border:2px solid #000; pointer-events:none; }
   #calibHint { position:absolute; left:0; right:0; bottom:9%; text-align:center; color:#aaa; font-size:16px; }
+  #hud.light { color:#111; text-shadow:none; }
   #hud { position:fixed; top:14px; left:20px; font-weight:700; font-size:34px; color:#fff; text-shadow:0 2px 8px #000; pointer-events:none; }
   #status { position:fixed; bottom:10px; left:14px; color:var(--mut); font:12px ui-monospace,monospace; pointer-events:none; white-space:pre; }
   #preview { position:fixed; right:12px; bottom:12px; width:320px; border:1px solid #444; display:none; }
@@ -60,7 +61,7 @@
       <button class="main" id="startBtn">Старт</button>
       <button id="noCamBtn">Без камеры (мышью)</button>
     </div>
-    <p><kbd>C</kbd> калибровка · <kbd>D</kbd> отладка · <kbd>S</kbd> настройки · <kbd>R</kbd> сброс счёта · <kbd>F</kbd> весь экран · клик мышью = попадание</p>
+    <p><kbd>C</kbd> калибровка · <kbd>D</kbd> отладка · <kbd>S</kbd> настройки · <kbd>R</kbd> сброс счёта · <kbd>B</kbd> фон · <kbd>F</kbd> весь экран · клик мышью = попадание</p>
   </div>
 </div>
 
@@ -87,6 +88,8 @@
   <input type="range" id="s_count" min="1" max="12" step="1">
   <label>Запас попадания вокруг шарика, % <span class="v" id="v_slack"></span></label>
   <input type="range" id="s_slack" min="0" max="100" step="5">
+  <label>Фон (B — переключить) <span class="v" id="v_bg"></span></label>
+  <select id="s_bg" style="width:100%"><option value="0">Тёмный</option><option value="1">Белый (для тёмного мяча)</option><option value="2">Небо</option></select>
 </div>
 
 <script>
@@ -96,7 +99,7 @@ const LS = {
   get(k, d) { try { const v = localStorage.getItem('proektor.' + k); return v ? JSON.parse(v) : d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem('proektor.' + k, JSON.stringify(v)); } catch {} }
 };
-const cfg = Object.assign({ thr: 30, minBlob: 6, maxBlob: 600, cooldown: 400, size: 9, count: 5, slack: 30 }, LS.get('cfg', {}));
+const cfg = Object.assign({ thr: 30, minBlob: 6, maxBlob: 600, cooldown: 400, size: 9, count: 5, slack: 30, bg: 0 }, LS.get('cfg', {}));
 
 // ---------- dom ----------
 const $ = id => document.getElementById(id);
@@ -332,7 +335,7 @@ function drawBalloon(b, now) {
   if (k <= 0) return;
   const r = b.r * (0.4 + 0.6 * k);
   g.globalAlpha = k;
-  g.strokeStyle = '#ddd'; g.lineWidth = 2; g.beginPath(); g.moveTo(b.x, b.y + r); g.lineTo(b.x, b.y + r * 2); g.stroke();
+  g.strokeStyle = cfg.bg ? '#666' : '#ddd'; g.lineWidth = 2; g.beginPath(); g.moveTo(b.x, b.y + r); g.lineTo(b.x, b.y + r * 2); g.stroke();
   const grd = g.createRadialGradient(b.x - r * .35, b.y - r * .4, r * .1, b.x, b.y, r * 1.1);
   grd.addColorStop(0, '#fff'); grd.addColorStop(0.25, b.c); grd.addColorStop(1, shade(b.c));
   g.fillStyle = grd; g.beginPath(); g.ellipse(b.x, b.y, r * 0.86, r, 0, 0, Math.PI * 2); g.fill();
@@ -344,7 +347,10 @@ function shade(hex) {
 }
 function render() {
   const now = performance.now();
-  g.fillStyle = '#05060a'; g.fillRect(0, 0, W, H);
+  if (cfg.bg === 1) g.fillStyle = '#ffffff';
+  else if (cfg.bg === 2) { const sk = g.createLinearGradient(0, 0, 0, H); sk.addColorStop(0, '#7cc4ff'); sk.addColorStop(1, '#dff1ff'); g.fillStyle = sk; }
+  else g.fillStyle = '#05060a';
+  g.fillRect(0, 0, W, H);
   for (const b of balloons) drawBalloon(b, now);
   for (const p of particles) {
     p.x += p.vx; p.y += p.vy; p.vy += 0.25; p.life -= 0.025;
@@ -367,7 +373,7 @@ function render() {
     g.globalAlpha = 1;
     $('status').textContent = `камера: ${camOn ? camInfo : 'выкл'} · обработка ${procFps.toFixed(0)} к/с · калибровка: ${Hm ? 'есть' : 'нет'} · движение: ${motionCells} клеток`;
   }
-  $('hud').textContent = score;
+  $('hud').textContent = score; $('hud').classList.toggle('light', cfg.bg > 0);
   requestAnimationFrame(render);
 }
 
@@ -391,10 +397,11 @@ function setDebug(on) { debug = on; preview.style.display = on && camOn ? 'block
 function bindSettings() {
   for (const k of Object.keys(cfg)) {
     const el = $('s_' + k); if (!el) continue;
-    el.value = cfg[k]; $('v_' + k).textContent = cfg[k];
+    el.value = cfg[k]; $('v_' + k).textContent = k === 'bg' ? '' : cfg[k];
     el.addEventListener('input', () => {
       cfg[k] = +el.value; $('v_' + k).textContent = cfg[k]; LS.set('cfg', cfg);
       if (k === 'size' || k === 'count') layoutBalloons();
+      if (k === 'bg') { warm = 0; $('v_bg').textContent = ''; }
     });
   }
 }
@@ -418,6 +425,7 @@ addEventListener('keydown', e => {
   else if (k === 'KeyD') setDebug(!debug);
   else if (k === 'KeyS') { const s = $('settings'); s.style.display = s.style.display === 'block' ? 'none' : 'block'; }
   else if (k === 'KeyR') { score = 0; layoutBalloons(); }
+  else if (k === 'KeyB') { cfg.bg = (cfg.bg + 1) % 3; $('s_bg').value = cfg.bg; LS.set('cfg', cfg); warm = 0; }
   else if (k === 'Escape') $('start').style.display = 'flex';
 });
 
