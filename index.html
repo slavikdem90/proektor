@@ -422,7 +422,17 @@ addEventListener('keydown', e => {
 });
 
 resize(); bindSettings(); setDebug(false); render();
-if (navigator.mediaDevices?.getUserMedia) listCams(); else toast('Браузер не даёт доступ к камере');
+if (navigator.mediaDevices?.getUserMedia) {
+  listCams();
+  // iPhone (Continuity) and USB cameras can appear after page load
+  navigator.mediaDevices.addEventListener('devicechange', async () => {
+    const sel = $('camSel'), keep = sel.value;
+    const devs = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+    sel.innerHTML = devs.map((d, i) => `<option value="${d.deviceId}">${d.label || 'Камера ' + (i + 1)}</option>`).join('');
+    if (devs.some(d => d.deviceId === keep)) sel.value = keep;
+    toast('Список камер обновлён');
+  });
+} else toast('Браузер не даёт доступ к камере');
 </script>
 </body>
 </html>
